@@ -1,0 +1,7 @@
+buckets:
+    - bucket_uri: gs://em52-us-depmap-src-restr-prod-6f04/MAT2A/Projects/External_Resources/CbioPortal
+      mount_path: $HOME/Projects/underrepresented_lesions/data/TCGA
+
+    - bucket_uri: gs://em52-us-depmap-src-restr-prod-6f04/data/DMC_25Q2
+      mount_path: $HOME/Projects/underrepresented_lesions/data/DMC_25Q2
+      

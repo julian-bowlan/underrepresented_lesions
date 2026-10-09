@@ -1,0 +1,11 @@
+# Ignore everything by default
+*
+
+# White list of what to include
+!.gitignore
+!README.md
+!buckets.yaml
+!*.Rproj
+!src/
+!src/**
+

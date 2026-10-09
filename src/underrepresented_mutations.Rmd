@@ -1,0 +1,355 @@
+---
+title: "Underrepresented mutations in DepMap"
+
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      knit_root_dir = here::here(),
+      output_dir = 'out',
+      output_file = paste0(xfun::sans_ext(basename(input)), '_', format(Sys.Date(),format="%d%b%Y"), '.html'
+        ),
+      envir = globalenv()
+    )
+  })
+
+output: 
+  html_document: 
+    code_download: yes
+    date: "`r format(Sys.time(), '%d-%B-%Y, %H:%M:%S %Z')`"
+    toc: yes
+    toc_float: yes
+    fig_width: 10
+    fig_height: 10
+    fig_caption: yes
+    number_sections: yes
+---
+  
+```{r setup, include=FALSE}
+
+# set up output html figures to be in SVG format
+# set up current working directory to be the project directory
+knitr::opts_chunk$set(echo = TRUE,dev='svg',root.dir = rprojroot::find_rstudio_root_file())
+date.stamp <- format(Sys.Date(),format="%d%b%Y")
+print(rprojroot::find_rstudio_root_file())
+knitr::opts_knit$set(root.dir=rprojroot::find_rstudio_root_file())
+
+# THIS NEEDS TO BE EDITED
+this.analysis <- "underrepresented_mutations"
+
+# output files will be prefixed with this.analysis and placed in the "out" folder
+filestamp <- function(x) {
+  paste0('out/',this.analysis,"_",xfun::sans_ext(x),"_", format(Sys.Date(),format="%d%b%Y"), ".",xfun::file_ext(x))
+}
+
+# copy snapshot of this Rmd to output folder
+this.rmd <- knitr::current_input()
+if(!is.null(this.rmd)) {
+system(paste0("cp src/",
+              this.rmd,
+              " ",
+              paste0("out/",xfun::sans_ext(this.rmd),'_',format(Sys.Date(),format="%d%b%Y"),".",xfun::file_ext(this.rmd))
+)
+)
+}
+
+options(tidyverse.quiet = TRUE)
+
+getTime <- function() format(Sys.time(), "%H:%M:%S")
+
+```
+
+## Load libraries
+
+```{r}
+
+library(tidyverse)
+library(magrittr)
+
+```
+
+## Load data
+
+```{r}
+
+tcgaDataDir <- "data/TCGA"
+
+# Mount TCGA bucket if it isn't already mounted
+if(length(list.files(tcgaDataDir)) == 0) system("axe-cloud-fuser mount --path buckets.yaml")
+
+# Define TCGA studies of interest
+# SOI <- c("LAML", "LGG", "GBM", "PAAD", "COADREAD", "HNSC", "ESCA", "DLBC", "BRCA", "LUAD", "LUSC", "PRAD", "SARC")
+SOI <- c("LAML", "LGG", "GBM", "PAAD", "COADREAD", "HNSC", "ESCA", "BRCA", "LUAD", "LUSC")
+
+# Define types of mutations to remove
+mut_to_remove <- c("3'Flank", "3'UTR", "5'Flank", "5'UTR", "IGR", "Intron", "RNA", "Silent")
+
+# Define damaging mutations
+damaging_mut <- c("Frame_Shift_Del", "Frame_Shift_Ins", "Nonsense_Mutation", "Translation_Start_Site", "Splice_Region", "Splice_Site")
+
+all_ind <- list()
+ind_cases <- list()
+
+for(ind in list.files(tcgaDataDir, pattern = "_tcga$"))
+{
+    
+    if(ind != "luad_tcga" & ind %in% paste(tolower(SOI), "tcga", sep = "_"))
+    {
+        all_ind[[ind]] <- read_tsv(file.path(tcgaDataDir, ind, "data_mutations.txt")) %>%
+                            select(Tumor_Sample_Barcode, Hugo_Symbol, Entrez_Gene_Id,
+                                   Variant_Classification, Reference_Allele, Tumor_Seq_Allele1, Tumor_Seq_Allele2,
+                                   HGVSc, HGVSp_Short, Hotspot) %>%
+                            filter(!Variant_Classification %in% mut_to_remove) %>%
+                            mutate(Damaging = ifelse(Variant_Classification %in% damaging_mut, 1, 0),
+                                   ProjectID = paste0("TCGA-", toupper(str_extract(ind, "[^_]+"))))
+
+        ind_cases[[ind]] <- data.frame(ProjectID = paste0("TCGA-", toupper(str_extract(ind, "[^_]+"))),
+                                       Tumor_Sample_Barcode = unlist(lapply(str_split(readLines(pipe(paste0("grep 'case_list_ids' ", tcgaDataDir, "/", ind, "/case_lists/cases_sequenced.txt"))), "\t"), function(x) gsub("case_list_ids: ", "", x))))
+        
+    } else if(ind == "luad_tcga")
+    {
+        all_ind[[ind]] <- read_tsv(file.path(tcgaDataDir, ind, "data_mutations_mskcc.txt")) %>%
+                            select(Tumor_Sample_Barcode, Hugo_Symbol, Entrez_Gene_Id,
+                                   Variant_Classification, Reference_Allele, Tumor_Seq_Allele1, Tumor_Seq_Allele2,
+                                   HGVSc, HGVSp_Short, Hotspot) %>%
+                            filter(!Variant_Classification %in% mut_to_remove) %>%
+                            mutate(Damaging = ifelse(Variant_Classification %in% damaging_mut, 1, 0),
+                                   ProjectID = paste0("TCGA-", toupper(str_extract(ind, "[^_]+"))))
+        
+        ind_cases[[ind]] <- data.frame(ProjectID = paste0("TCGA-", toupper(str_extract(ind, "[^_]+"))),
+                                       Tumor_Sample_Barcode = unlist(lapply(str_split(readLines(pipe(paste0("grep 'case_list_ids' ", tcgaDataDir, "/", ind, "/case_lists/cases_sequenced.txt"))), "\t"), function(x) gsub("case_list_ids: ", "", x))))
+        
+    }
+    
+}
+
+all_dat <- do.call("bind_rows", all_ind)
+ind_mtdt <- do.call("bind_rows", ind_cases)
+
+# rm(all_ind)
+invisible(gc())
+die
+```
+
+## Organize data
+
+```{r}
+
+# Organize metadata
+ind_mtdt %<>% separate(Tumor_Sample_Barcode, into = c("a", "b", "c", "Sample_Type"), sep = "-") %>%
+                mutate(Sample_Type = case_when(Sample_Type %in% c("06", "07") ~ "Metastatic", .default = "Primary"),
+                       PatientID = paste(a, b, c, sep = "-")) %>% select(-c(a, b, c))
+
+ind_summ <- ind_mtdt %>% filter(Sample_Type != "Metastatic") %>%
+                            group_by(ProjectID) %>%
+                            summarise(num_patients = length(unique(PatientID))) %>%
+                            ungroup() %>%
+                            as.data.frame()
+
+# Add descriptive cancer type names
+ind_summ %<>% mutate(ProjectName = case_when(ProjectID == "TCGA-BRCA" ~ "Breast Invasive Carcinoma",
+                                             ProjectID == "TCGA-COADREAD" ~ "Colorectal Adenocarcinoma",
+                                             ProjectID == "TCGA-ESCA" ~ "Esophageal Carcinoma",
+                                             ProjectID == "TCGA-GBM" ~ "Glioblastoma Multiforme",
+                                             ProjectID == "TCGA-HNSC" ~ "Head & Neck Squamous Cell Carcinoma",
+                                             ProjectID == "TCGA-LAML" ~ "Acute Myeloid Leukemia",
+                                             ProjectID == "TCGA-LGG" ~ "Brain Lower Grade Glioma",
+                                             ProjectID == "TCGA-LUAD" ~ "Lung Adenocarcinoma",
+                                             ProjectID == "TCGA-LUSC" ~ "Lung Squamous Cell Carcinoma",
+                                             ProjectID == "TCGA-PAAD" ~ "Pancreatic Adenocarcinoma")) %>%
+                select(ProjectID, ProjectName, num_patients)
+
+ind_summ %<>% bind_rows(data.frame(ProjectID = "All Indications", ProjectName = "All Indications", num_patients = sum(ind_summ$num_patients)))
+
+
+# Get patient IDs and tumor types
+all_dat %<>% separate(Tumor_Sample_Barcode, into = c("a", "b", "c", "Sample_Type"), sep = "-") %>%
+                mutate(PatientID = paste(a, b, c, sep = "-")) %>% select(-c(a, b, c)) %>%
+                rename(ProteinChange = HGVSp_Short)
+
+# Separate metastatic tumors (06 = metastatic)
+# met <- all_dat %>% filter(Sample_Type == "06")
+
+# Remove metastatic tumors from data set
+all_dat %<>% filter(Sample_Type != "06")
+
+# Collapse data to the patient/mutation level
+all_dat_coll <- all_dat %>% group_by(PatientID, ProjectID, Hugo_Symbol, HGVSc, ProteinChange) %>%
+                            summarise(across(everything(), ~paste(unique(.), collapse = ";")))
+
+rm(all_dat)
+invisible(gc())
+
+```
+
+## Calculate mutation frequency
+
+```{r}
+
+# Get prevalence at the mutation level
+gene_mut_summ <- all_dat_coll %>% group_by(ProjectID, Hugo_Symbol, ProteinChange) %>%
+                                    summarise(all_HGVSc = paste(unique(HGVSc), collapse = ";"),
+                                              num_patients_with_mutation = length(unique(PatientID))) %>%
+                                    ungroup() %>%
+                                    left_join(ind_summ, by = "ProjectID") %>%
+                                    mutate(pct_patients_with_mutation = round(num_patients_with_mutation/num_patients*100, digits = 1)) %>%
+                                    arrange(desc(pct_patients_with_mutation), desc(num_patients_with_mutation)) %>%
+                                    as.data.frame()
+
+# Get prevalence across all cancer types
+pancan_gene_mut_summ <- gene_mut_summ %>% group_by(Hugo_Symbol, all_HGVSc, ProteinChange) %>%
+                                            summarise(num_patients_with_mutation = sum(num_patients_with_mutation, na.rm = TRUE)) %>%
+                                            ungroup() %>%
+                                            mutate(ProjectID = "All Indications") %>%
+                                            left_join(ind_summ, by = "ProjectID") %>%
+                                            mutate(pct_patients_with_mutation = round(num_patients_with_mutation/num_patients*100, digits = 1)) %>%
+                                            arrange(desc(pct_patients_with_mutation), desc(num_patients_with_mutation)) %>%
+                                            as.data.frame()
+
+# Get prevalence of individual missense mutations and combined truncating mutations
+tmp_dam <- all_dat_coll %>% filter(Damaging == 1) %>%
+                            mutate(orig_ProteinChange = ProteinChange,
+                                   ProteinChange = "Damaging_Mutation") %>%
+                            group_by(ProjectID, Hugo_Symbol, ProteinChange) %>%
+                            summarise(all_damaging_mut_ProteinChange = paste(unique(orig_ProteinChange), collapse = ";"),
+                                      all_HGVSc = paste(unique(HGVSc), collapse = ";"),
+                                      num_patients_with_mutation = length(unique(PatientID))) %>%
+                            ungroup()
+
+tmp_mut <- all_dat_coll %>% filter(Damaging != 1) %>%
+                            group_by(ProjectID, Hugo_Symbol, ProteinChange) %>%
+                            summarise(all_HGVSc = paste(unique(HGVSc), collapse = ";"),
+                                      num_patients_with_mutation = length(unique(PatientID))) %>%
+                            ungroup()
+
+gene_mut_bin_damaging_summ <- bind_rows(tmp_dam, tmp_mut) %>%
+                                left_join(ind_summ, by = "ProjectID") %>%
+                                mutate(pct_patients_with_mutation = round(num_patients_with_mutation/num_patients*100, digits = 1)) %>%
+                                arrange(desc(pct_patients_with_mutation), desc(num_patients_with_mutation), Hugo_Symbol, ProteinChange, ProjectID) %>%
+                                as.data.frame()
+
+# Get prevalence across all cancer types
+pancan_gene_mut_bin_damaging_summ <- gene_mut_bin_damaging_summ %>% group_by(Hugo_Symbol, all_damaging_mut_ProteinChange, all_HGVSc, ProteinChange) %>%
+                                                                    summarise(num_patients_with_mutation = sum(num_patients_with_mutation, na.rm = TRUE)) %>%
+                                                                    ungroup() %>%
+                                                                    mutate(ProjectID = "All Indications") %>%
+                                                                    left_join(ind_summ, by = "ProjectID") %>%
+                                                                    mutate(pct_patients_with_mutation = round(num_patients_with_mutation/num_patients*100, digits = 1)) %>%
+                                                                    arrange(desc(pct_patients_with_mutation), desc(num_patients_with_mutation)) %>%
+                                                                    as.data.frame()
+
+rm("tmp_dam", "tmp_mut")
+
+```
+
+## Load DepMap data
+
+```{r}
+
+depmapDataDir <- "data/DMC_25Q2"
+
+# Load DepMap somatic mutations
+dmc_mut <- read_csv(file.path(depmapDataDir, "OmicsSomaticMutations.csv")) %>%
+            select(ModelID, HugoSymbol, DNAChange, ProteinChange, VariantType, VariantInfo)
+
+# Load DepMap metadata
+dmc_mtdt <- read_csv(file.path(depmapDataDir, "Model.csv"))
+
+# Load first few columns of Chronos data to extract which models are screened
+dep <- read_csv(pipe(paste0("cut -d',' -f1,2,3,4,5 ", file.path(depmapDataDir, "CRISPRGeneEffect.csv"))))
+
+colnames(dep)[1] <- "ModelID"
+
+```
+
+## Organize DepMap data
+
+```{r}
+
+# Define & annotate damaging mutations
+dmc_damaging_mut <- c("frameshift_variant", "splice_acceptor_variant", "splice_donor_variant", "start_lost", "stop_gained")
+
+dmc_mut %<>% left_join(select(dmc_mtdt, ModelID, OncotreeLineage, OncotreePrimaryDisease, ModelType), by = "ModelID") %>%
+                filter(ModelType == "Cell Line" & ModelID %in% dep$ModelID) %>%
+                mutate(Damaging = ifelse(grepl(paste(dmc_damaging_mut, collapse = "|"), VariantInfo), 1, 0),
+                        ProteinChange = case_when(is.na(ProteinChange) & grepl("splice", VariantInfo) ~ "Splice_Site", .default = ProteinChange))
+
+# Calculate number of models with each mutation
+dmc_gene_mut_summ <- dmc_mut %>% group_by(HugoSymbol, ProteinChange) %>%
+                                    summarise(DNAChange = paste(unique(DNAChange), collapse = ";"), num_DepMap_models_with_mutation = length(unique(ModelID))) %>%
+                                    ungroup() %>%
+                                    mutate(DNAChange = gsub("NA;", "", DNAChange)) %>%
+                                    arrange(desc(num_DepMap_models_with_mutation))
+
+# Bin damaging mutations and calculate number of models with each mutation
+tmp_dmc_dam <- dmc_mut %>% filter(Damaging == 1) %>%
+                        mutate(orig_ProteinChange = ProteinChange,
+                               ProteinChange = "Damaging_Mutation") %>%
+                        group_by(HugoSymbol, ProteinChange) %>%
+                        summarise(all_damaging_mut_ProteinChange = paste(unique(orig_ProteinChange), collapse = ";"),
+                                  all_damaging_mut_DNAChange = paste(unique(DNAChange), collapse = ";"),
+                                  num_DepMap_models_with_mutation = length(unique(ModelID))) %>%
+                        ungroup()
+
+tmp_dmc_mut <- dmc_mut %>% filter(Damaging != 1) %>%
+                        group_by(HugoSymbol, ProteinChange) %>%
+                        summarise(num_DepMap_models_with_mutation = length(unique(ModelID))) %>%
+                        ungroup()
+
+dmc_gene_mut_bin_damaging_summ <- bind_rows(tmp_dmc_dam, tmp_dmc_mut) %>%
+                                    arrange(desc(num_DepMap_models_with_mutation))
+
+rm("tmp_dmc_dam", "tmp_dmc_mut")
+
+```
+
+## Add DepMap model numbers to TCGA data
+
+```{r}
+
+gene_mut_summ %<>% left_join(select(dmc_gene_mut_summ, Hugo_Symbol = HugoSymbol, ProteinChange, num_DepMap_models_with_mutation),
+                             by = c("Hugo_Symbol", "ProteinChange")) %>%
+                    mutate(num_DepMap_models_with_mutation = case_when(is.na(num_DepMap_models_with_mutation) ~ 0, .default = num_DepMap_models_with_mutation)) %>%
+                    select(ProjectID, ProjectName, GeneSymbol = Hugo_Symbol, ProteinChange, all_HGVSc,
+                           num_patients_with_mutation, num_patients, pct_patients_with_mutation, num_DepMap_models_with_mutation)
+
+gene_mut_bin_damaging_summ %<>% left_join(select(dmc_gene_mut_bin_damaging_summ, Hugo_Symbol = HugoSymbol, ProteinChange, num_DepMap_models_with_mutation),
+                                          by = c("Hugo_Symbol", "ProteinChange")) %>%
+                    mutate(num_DepMap_models_with_mutation = case_when(is.na(num_DepMap_models_with_mutation) ~ 0, .default = num_DepMap_models_with_mutation)) %>%
+                    select(ProjectID, ProjectName, GeneSymbol = Hugo_Symbol, ProteinChange, all_damaging_mut_ProteinChange, all_HGVSc,
+                           num_patients_with_mutation, num_patients, pct_patients_with_mutation, num_DepMap_models_with_mutation)
+
+pancan_gene_mut_summ %<>% left_join(select(dmc_gene_mut_summ, Hugo_Symbol = HugoSymbol, ProteinChange, num_DepMap_models_with_mutation),
+                                    by = c("Hugo_Symbol", "ProteinChange")) %>%
+                            mutate(num_DepMap_models_with_mutation = case_when(is.na(num_DepMap_models_with_mutation) ~ 0, .default = num_DepMap_models_with_mutation)) %>%
+                            select(ProjectID, ProjectName, GeneSymbol = Hugo_Symbol, ProteinChange, all_HGVSc,
+                                   num_patients_with_mutation, num_patients, pct_patients_with_mutation, num_DepMap_models_with_mutation)
+
+pancan_gene_mut_bin_damaging_summ %<>% left_join(select(dmc_gene_mut_bin_damaging_summ, Hugo_Symbol = HugoSymbol, ProteinChange, num_DepMap_models_with_mutation),
+                                                    by = c("Hugo_Symbol", "ProteinChange")) %>%
+                                        mutate(num_DepMap_models_with_mutation = case_when(is.na(num_DepMap_models_with_mutation) ~ 0, .default = num_DepMap_models_with_mutation)) %>%
+                                        select(ProjectID, ProjectName, GeneSymbol = Hugo_Symbol, ProteinChange, all_damaging_mut_ProteinChange, all_HGVSc,
+                                               num_patients_with_mutation, num_patients, pct_patients_with_mutation, num_DepMap_models_with_mutation)
+
+# Save output
+write_tsv(gene_mut_summ, "out/summary_of_mutations_in_TCGA_and_DepMap.txt")
+write_tsv(gene_mut_bin_damaging_summ, "out/summary_of_mutations_in_TCGA_and_DepMap_damaging_mutations_binned.txt")
+
+```
+
+## Find prevalent lesions that are underrepresented in DepMap
+
+```{r}
+
+# List known cancer driver genes to avoid
+known_genes <- c("KRAS", "BRAF", "EGFR", "IDH1", "APC", "CDKN2A", "CDKN2B", "FBXW7", "TP53", "PIK3CA", "ATRX", "PTEN")
+
+gene_mut_UR <- gene_mut_summ %>% filter(num_DepMap_models_with_mutation < 10 & !GeneSymbol %in% known_genes)
+
+gene_mut_bin_damaging_UR <- gene_mut_bin_damaging_summ %>% filter(num_DepMap_models_with_mutation < 10 & !GeneSymbol %in% known_genes)
+
+```
+
+
+```{r}
+knitr::knit_exit()
+```
